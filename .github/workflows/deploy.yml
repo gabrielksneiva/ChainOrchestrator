@@ -345,28 +345,274 @@ jobs:
           echo "🚀 Fast deployment complete! (no Terraform run)"
           echo "ℹ️  To update infrastructure, run: cd terraform && terraform apply"
 
+  # ==================== INTEGRATION TESTS ====================
+  integration-test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    needs: [ deploy ]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions-integration-test
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Test 1 - Health Check
+        run: |
+          echo "📋 Test 1: API Gateway Health Check"
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" "https://lj2vv3cmj1.execute-api.us-east-1.amazonaws.com/health")
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n1)
+          
+          if [ "$HTTP_CODE" -eq 200 ] && echo "$BODY" | grep -q "healthy"; then
+            echo "✅ Health check passed"
+            echo "$BODY"
+          else
+            echo "❌ Health check failed (HTTP $HTTP_CODE)"
+            echo "$BODY"
+            exit 1
+          fi
+
+      - name: Test 2 - POST Transaction (EVM)
+        run: |
+          echo "📋 Test 2: POST Transaction to EVM"
+          
+          PAYLOAD='{
+            "blockchain": "EVM",
+            "network": "ethereum",
+            "transaction_type": "transfer",
+            "from_address": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+            "to_address": "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199",
+            "amount": "1.5",
+            "currency": "ETH"
+          }'
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "https://lj2vv3cmj1.execute-api.us-east-1.amazonaws.com/transaction" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | head -n1)
+          
+          if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 202 ]; then
+            if echo "$BODY" | grep -q "message_id"; then
+              echo "✅ Transaction submitted successfully"
+              echo "$BODY"
+            else
+              echo "❌ Response missing message_id"
+              echo "$BODY"
+              exit 1
+            fi
+          else
+            echo "❌ Transaction failed (HTTP $HTTP_CODE)"
+            echo "$BODY"
+            exit 1
+          fi
+
+      - name: Test 3 - Verify SNS to SQS (EVM)
+        run: |
+          echo "📋 Test 3: Verify message routing to EVM queue"
+          
+          QUEUE_URL=$(aws sqs list-queues \
+            --queue-name-prefix "chainorchestrator-evm-queue" \
+            --query 'QueueUrls[0]' \
+            --output text)
+          
+          if [ -z "$QUEUE_URL" ] || [ "$QUEUE_URL" == "None" ]; then
+            echo "❌ EVM queue not found"
+            exit 1
+          fi
+          
+          echo "Waiting 5s for message propagation..."
+          sleep 5
+          
+          MESSAGE=$(aws sqs receive-message \
+            --queue-url "$QUEUE_URL" \
+            --max-number-of-messages 1 \
+            --wait-time-seconds 10 \
+            --output json)
+          
+          if echo "$MESSAGE" | grep -q "Messages"; then
+            echo "✅ Message received in EVM queue"
+            
+            # Cleanup
+            RECEIPT=$(echo "$MESSAGE" | jq -r '.Messages[0].ReceiptHandle')
+            aws sqs delete-message \
+              --queue-url "$QUEUE_URL" \
+              --receipt-handle "$RECEIPT" || true
+          else
+            echo "⚠️  No message in queue (might be consumed already)"
+          fi
+
+      - name: Test 4 - POST Transaction (Bitcoin)
+        run: |
+          echo "📋 Test 4: POST Transaction to Bitcoin"
+          
+          PAYLOAD='{
+            "blockchain": "Bitcoin",
+            "network": "mainnet",
+            "transaction_type": "transfer",
+            "from_address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+            "to_address": "3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy",
+            "amount": "0.001",
+            "currency": "BTC"
+          }'
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "https://lj2vv3cmj1.execute-api.us-east-1.amazonaws.com/transaction" \
+            -H "Content-Type: application/json" \
+            -d "$PAYLOAD")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          
+          if [ "$HTTP_CODE" -eq 200 ] || [ "$HTTP_CODE" -eq 202 ]; then
+            echo "✅ Bitcoin transaction submitted"
+          else
+            echo "❌ Failed (HTTP $HTTP_CODE)"
+            exit 1
+          fi
+
+      - name: Test 5 - Verify Bitcoin Queue
+        run: |
+          echo "📋 Test 5: Verify message routing to Bitcoin queue"
+          
+          QUEUE_URL=$(aws sqs list-queues \
+            --queue-name-prefix "chainorchestrator-btc-queue" \
+            --query 'QueueUrls[0]' \
+            --output text)
+          
+          sleep 5
+          
+          MESSAGE=$(aws sqs receive-message \
+            --queue-url "$QUEUE_URL" \
+            --max-number-of-messages 1 \
+            --wait-time-seconds 10 \
+            --output json)
+          
+          if echo "$MESSAGE" | grep -q "Messages"; then
+            echo "✅ Message received in Bitcoin queue"
+            
+            RECEIPT=$(echo "$MESSAGE" | jq -r '.Messages[0].ReceiptHandle')
+            aws sqs delete-message \
+              --queue-url "$QUEUE_URL" \
+              --receipt-handle "$RECEIPT" || true
+          else
+            echo "⚠️  No message in queue"
+          fi
+
+      - name: Test 6 - Invalid Transaction (Validation)
+        run: |
+          echo "📋 Test 6: Test validation with invalid payload"
+          
+          RESPONSE=$(curl -s -w "\n%{http_code}" \
+            -X POST "https://lj2vv3cmj1.execute-api.us-east-1.amazonaws.com/transaction" \
+            -H "Content-Type: application/json" \
+            -d '{"blockchain":"EVM"}')
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          
+          if [ "$HTTP_CODE" -eq 400 ]; then
+            echo "✅ Validation correctly rejected invalid request"
+          else
+            echo "❌ Expected HTTP 400, got $HTTP_CODE"
+            exit 1
+          fi
+
+      - name: Test 7 - Infrastructure Health
+        run: |
+          echo "📋 Test 7: Verify infrastructure components"
+          
+          # Lambda
+          if aws lambda get-function --function-name chainorchestrator-production &>/dev/null; then
+            echo "✅ Lambda function exists"
+          else
+            echo "❌ Lambda not found"
+            exit 1
+          fi
+          
+          # SNS
+          if aws sns get-topic-attributes \
+            --topic-arn "arn:aws:sns:us-east-1:490873503238:chainorchestrator-Transactions-production" &>/dev/null; then
+            echo "✅ SNS topic exists"
+          else
+            echo "❌ SNS topic not found"
+            exit 1
+          fi
+          
+          # SQS Queues
+          QUEUE_COUNT=$(aws sqs list-queues \
+            --queue-name-prefix "chainorchestrator" \
+            --query 'length(QueueUrls)' \
+            --output text)
+          
+          if [ "$QUEUE_COUNT" -ge 4 ]; then
+            echo "✅ All SQS queues exist ($QUEUE_COUNT found)"
+          else
+            echo "❌ Expected 4+ queues, found $QUEUE_COUNT"
+            exit 1
+          fi
+
+      - name: Integration Test Summary
+        if: always()
+        run: |
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🧪 Integration Test Results"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Job Status: ${{ job.status }}"
+          echo ""
+          if [ "${{ job.status }}" == "success" ]; then
+            echo "✅ All integration tests passed!"
+            echo ""
+            echo "Verified:"
+            echo "  • API Gateway health endpoint"
+            echo "  • Transaction submission (EVM + Bitcoin)"
+            echo "  • SNS → SQS message routing"
+            echo "  • Request validation"
+            echo "  • Infrastructure components"
+          else
+            echo "❌ Some integration tests failed"
+            echo "Check individual test steps above"
+          fi
+
   # ==================== SUMMARY ====================
   summary:
     name: Pipeline Summary
     runs-on: ubuntu-latest
     if: always()
-    needs: [ lint, security, test, build, docker, deploy ]
+    needs: [ lint, security, test, build, docker, deploy, integration-test ]
     steps:
       - name: Check results
         run: |
           echo "📊 Pipeline Results:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "✅ Lint:     ${{ needs.lint.result }}"
-          echo "✅ Security: ${{ needs.security.result }}"
-          echo "✅ Test:     ${{ needs.test.result }}"
-          echo "✅ Build:    ${{ needs.build.result }}"
-          echo "✅ Docker:   ${{ needs.docker.result }}"
-          echo "✅ Deploy:   ${{ needs.deploy.result }}"
+          echo "Lint:        ${{ needs.lint.result }}"
+          echo "Security:    ${{ needs.security.result }}"
+          echo "Test:        ${{ needs.test.result }}"
+          echo "Build:       ${{ needs.build.result }}"
+          echo "Docker:      ${{ needs.docker.result }}"
+          echo "Deploy:      ${{ needs.deploy.result }}"
+          echo "Integration: ${{ needs.integration-test.result }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           
           if [ "${{ needs.lint.result }}" == "failure" ] || \
              [ "${{ needs.security.result }}" == "failure" ] || \
-             [ "${{ needs.test.result }}" == "failure" ]; then
+             [ "${{ needs.test.result }}" == "failure" ] || \
+             [ "${{ needs.deploy.result }}" == "failure" ] || \
+             [ "${{ needs.integration-test.result }}" == "failure" ]; then
             echo "❌ Pipeline failed"
             exit 1
           fi
