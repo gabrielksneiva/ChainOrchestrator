@@ -17,10 +17,10 @@ resource "aws_sns_topic_policy" "transactions" {
     Version = "2012-10-17"
     Statement = [
       {
-        Sid    = "AllowPublishFromECS"
+        Sid    = "AllowPublishFromLambda"
         Effect = "Allow"
         Principal = {
-          AWS = aws_iam_role.ecs_task_role.arn
+          AWS = aws_iam_role.lambda_execution_role.arn
         }
         Action   = "SNS:Publish"
         Resource = aws_sns_topic.transactions.arn

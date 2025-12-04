@@ -9,8 +9,8 @@ resource "aws_lambda_function" "orchestrator" {
 
   source_code_hash = filebase64sha256("${path.module}/../lambda.zip")
 
-  timeout     = 30
-  memory_size = 256
+  timeout     = var.lambda_timeout
+  memory_size = var.lambda_memory
 
   environment {
     variables = {

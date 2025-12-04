@@ -257,13 +257,17 @@ jobs:
 
   # ==================== DEPLOY ====================
   deploy:
-    name: Deploy to AWS Lambda
+    name: Deploy Infrastructure with Terraform
     runs-on: ubuntu-latest
     timeout-minutes: 20
     needs: [ build, docker ]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     environment:
-      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+      name: production
+    permissions:
+      id-token: write
+      contents: read
+      deployments: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -278,125 +282,117 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: github-actions
+          role-session-name: github-actions-terraform
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
 
-      - name: Get Lambda function name
-        id: lambda-name
-        run: |
-          echo "function-name=ChainOrchestrator-Lambda" >> $GITHUB_OUTPUT
-          echo "env-name=${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}" >> $GITHUB_OUTPUT
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.7.0
+          terraform_wrapper: false
 
-      - name: Check Lambda function exists
+      - name: Prepare Lambda package
         run: |
-          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
+          echo "📦 Creating Lambda deployment package..."
+          zip -j lambda.zip bootstrap
+          ls -lh lambda.zip
+          echo "✅ Lambda package ready"
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: |
+          echo "🔧 Initializing Terraform..."
+          terraform init
+
+      - name: Terraform Format Check
+        working-directory: terraform
+        run: terraform fmt -check -recursive || true
+
+      - name: Terraform Validate
+        working-directory: terraform
+        run: terraform validate
+
+      - name: Terraform Plan
+        working-directory: terraform
+        run: |
+          echo "📋 Planning infrastructure changes..."
+          terraform plan -out=tfplan -input=false
+          terraform show -no-color tfplan > tfplan.txt
+
+      - name: Upload plan
+        uses: actions/upload-artifact@v4
+        with:
+          name: terraform-plan
+          path: terraform/tfplan.txt
+          retention-days: 7
+
+      - name: Terraform Apply
+        working-directory: terraform
+        run: |
+          echo "🚀 Applying infrastructure changes..."
+          terraform apply -auto-approve -input=false tfplan
+
+      - name: Get Infrastructure Outputs
+        id: tf-outputs
+        working-directory: terraform
+        run: |
+          API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "not-configured")
+          LAMBDA_NAME=$(terraform output -raw lambda_function_name)
+          SNS_TOPIC=$(terraform output -raw sns_topic_arn)
           
-          echo "🔍 Checking for Lambda function: $FUNCTION_NAME"
-          echo "AWS Region: ${{ env.AWS_REGION }}"
-          
-          # List all functions to debug
-          echo "Available functions:"
-          aws lambda list-functions --query 'Functions[].FunctionName' --output text
-          
-          # Check specific function
-          if ! aws lambda get-function --function-name "$FUNCTION_NAME" 2>&1; then
-            echo ""
-            echo "❌ Lambda function '$FUNCTION_NAME' not found or no permission"
-            exit 1
-          fi
-          
-          echo "✅ Lambda function found: $FUNCTION_NAME"
+          echo "api-endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
+          echo "lambda-name=$LAMBDA_NAME" >> $GITHUB_OUTPUT
+          echo "sns-topic=$SNS_TOPIC" >> $GITHUB_OUTPUT
 
-      - name: Zip Lambda binary
-        run: |
-          zip -j lambda-deployment.zip bootstrap
-          ls -lh lambda-deployment.zip
-
-      - name: Update Lambda function code
-        run: |
-          aws lambda update-function-code \
-            --function-name "${{ steps.lambda-name.outputs.function-name }}" \
-            --zip-file fileb://lambda-deployment.zip \
-            --output json | jq '.Version, .LastModified'
-
-      - name: Wait for update
-        run: |
-          aws lambda wait function-updated \
-            --function-name "${{ steps.lambda-name.outputs.function-name }}"
-          echo "✅ Lambda function updated successfully"
-
-      - name: Publish new version
-        id: publish
-        run: |
-          VERSION=$(aws lambda publish-version \
-            --function-name "${{ steps.lambda-name.outputs.function-name }}" \
-            --query 'Version' \
-            --output text)
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "✅ Published version: $VERSION"
-
-      - name: Create/Update alias
-        run: |
-          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
-          ENV_NAME="${{ steps.lambda-name.outputs.env-name }}"
-          VERSION="${{ steps.publish.outputs.version }}"
-          
-          # Try to update, if fails create
-          aws lambda update-alias \
-            --function-name "$FUNCTION_NAME" \
-            --name "$ENV_NAME" \
-            --function-version "$VERSION" 2>/dev/null || \
-          aws lambda create-alias \
-            --function-name "$FUNCTION_NAME" \
-            --name "$ENV_NAME" \
-            --function-version "$VERSION"
-          
-          echo "✅ Alias '$ENV_NAME' points to version $VERSION"
-
-      - name: Health check
+      - name: Health Check
         timeout-minutes: 5
         run: |
-          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
-          ENV="${{ steps.lambda-name.outputs.env-name }}"
+          LAMBDA_NAME="${{ steps.tf-outputs.outputs.lambda-name }}"
+          API_ENDPOINT="${{ steps.tf-outputs.outputs.api-endpoint }}"
           
-          echo "🔍 Testing Lambda function directly: $FUNCTION_NAME"
+          echo "🔍 Running health checks..."
+          echo ""
           
-          # Test with a simple invoke
-          RESPONSE=$(aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
+          # Test Lambda directly
+          echo "Testing Lambda function: $LAMBDA_NAME"
+          aws lambda invoke \
+            --function-name "$LAMBDA_NAME" \
             --payload '{"httpMethod":"GET","path":"/health"}' \
             --cli-binary-format raw-in-base64-out \
-            response.json 2>&1)
+            response.json
           
-          if [ $? -eq 0 ]; then
-            echo "✅ Lambda invocation successful"
-            cat response.json
-            rm -f response.json
+          echo "Lambda Response:"
+          cat response.json
+          echo ""
+          
+          # Test API Gateway if configured
+          if [ "$API_ENDPOINT" != "not-configured" ]; then
+            echo "Testing API Gateway: ${API_ENDPOINT}/health"
+            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" "${API_ENDPOINT}/health" || echo "000")
+            HTTP_CODE=$(echo "$HEALTH_RESPONSE" | tail -n1)
+            
+            if [ "$HTTP_CODE" -eq 200 ]; then
+              echo "✅ API Gateway health check passed"
+            else
+              echo "⚠️  API Gateway health check failed (HTTP $HTTP_CODE)"
+            fi
           else
-            echo "⚠️  Lambda invocation failed"
-            echo "$RESPONSE"
-            echo ""
-            echo "ℹ️  Lambda function deployed but needs API Gateway configuration"
-            echo "ℹ️  To test manually: aws lambda invoke --function-name $FUNCTION_NAME response.json"
+            echo "ℹ️  API Gateway not configured, skipping HTTP check"
           fi
-
-      - name: Get deployment info
-        run: |
-          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
           
-          echo "📋 Deployment Summary:"
+          rm -f response.json
+
+      - name: Deployment Summary
+        run: |
+          echo "📋 Deployment Summary"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          aws lambda get-function-configuration \
-            --function-name "$FUNCTION_NAME" \
-            | jq '{
-              FunctionName,
-              Runtime,
-              Handler,
-              CodeSha256,
-              LastModified,
-              Version: .LastUpdateStatus
-            }'
+          echo "API Endpoint:  ${{ steps.tf-outputs.outputs.api-endpoint }}"
+          echo "Lambda:        ${{ steps.tf-outputs.outputs.lambda-name }}"
+          echo "SNS Topic:     ${{ steps.tf-outputs.outputs.sns-topic }}"
+          echo "Region:        ${{ env.AWS_REGION }}"
+          echo "Commit:        ${{ github.sha }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
       - name: Create deployment record
         uses: actions/github-script@v6

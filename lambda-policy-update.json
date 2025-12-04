@@ -8,11 +8,13 @@
         "lambda:UpdateFunctionCode",
         "lambda:UpdateFunctionConfiguration",
         "lambda:GetFunction",
+        "lambda:GetFunctionConfiguration",
         "lambda:PublishVersion",
         "lambda:UpdateAlias",
         "lambda:CreateAlias",
         "lambda:ListVersionsByFunction",
-        "lambda:ListFunctions"
+        "lambda:ListFunctions",
+        "lambda:InvokeFunction"
       ],
       "Resource": "*"
     },

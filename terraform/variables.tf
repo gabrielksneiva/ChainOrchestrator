@@ -25,13 +25,13 @@ variable "sns_topic_name" {
 variable "lambda_timeout" {
   description = "Lambda function timeout in seconds"
   type        = number
-  default     = 30
+  default     = 60
 }
 
 variable "lambda_memory" {
   description = "Lambda function memory in MB"
   type        = number
-  default     = 256
+  default     = 512
 }
 
 variable "log_retention_days" {
