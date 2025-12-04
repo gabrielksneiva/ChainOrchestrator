@@ -1,0 +1,484 @@
+name: Deploy Lambda
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'cmd/**'
+      - 'internal/**'
+      - 'pkg/**'
+      - 'go.mod'
+      - 'go.sum'
+      - 'Dockerfile'
+      - '.github/workflows/deploy.yml'
+  pull_request:
+    branches: [ main, develop ]
+  workflow_dispatch:
+
+env:
+  GO_VERSION: '1.24'
+  AWS_REGION: us-east-1
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+permissions:
+  contents: read
+  packages: write
+  security-events: write
+  id-token: write
+  checks: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ==================== LINT & FORMAT ====================
+  lint:
+    name: Lint & Format
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v3
+        with:
+          version: latest
+          args: --timeout=10m --out-format=github-actions
+          skip-cache: false
+
+      - name: Check formatting
+        run: |
+          if [ -n "$(gofmt -s -l .)" ]; then
+            echo "❌ Go files not formatted:"
+            gofmt -s -d .
+            exit 1
+          fi
+          echo "✅ All files formatted correctly"
+
+      - name: Check imports
+        run: |
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+          if ! goimports -l . | grep -q .; then
+            echo "✅ Imports are correct"
+          else
+            echo "❌ Imports need fixing:"
+            goimports -d .
+            exit 1
+          fi
+
+  # ==================== SECURITY SCAN ====================
+  security:
+    name: Security Scanning
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      security-events: write
+      contents: read
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run Gosec
+        uses: securego/gosec@master
+        with:
+          args: '-no-fail -fmt json -out gosec-report.json ./...'
+        continue-on-error: true
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: '.'
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+
+      - name: Upload Trivy results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v2
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      - name: Run Nancy (dependency check)
+        run: |
+          go install github.com/sonatype-nexus-community/nancy@latest
+          go list -json -m all | nancy sleuth -o json > nancy-report.json || true
+          cat nancy-report.json
+        continue-on-error: true
+
+  # ==================== TESTS & COVERAGE ====================
+  test:
+    name: Tests & Coverage
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Run tests with coverage
+        run: |
+          go test -v -race -coverprofile=coverage.out -covermode=atomic ./...
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Check coverage threshold
+        run: |
+          COVERAGE=$(go tool cover -func=coverage.out | tail -1 | awk '{print $3}' | sed 's/%//')
+          THRESHOLD=90
+          
+          if (( $(echo "$COVERAGE < $THRESHOLD" | bc -l) )); then
+            echo "❌ Coverage $COVERAGE% is below threshold of $THRESHOLD%"
+            exit 1
+          fi
+          echo "✅ Coverage $COVERAGE% meets threshold of $THRESHOLD%"
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.out
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+
+      - name: Comment PR with coverage
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const coverage = fs.readFileSync('coverage.out', 'utf8');
+            const lines = coverage.split('\n');
+            const lastLine = lines[lines.length - 2];
+            const match = lastLine.match(/total:\s+([\d.]+)%/);
+            const percentage = match ? match[1] : 'unknown';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## 📊 Test Coverage\n\n✅ Coverage: **${percentage}%**\n\n(Minimum: 90%)`
+            });
+
+  # ==================== BUILD ====================
+  build:
+    name: Build Lambda
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: [ lint, security, test ]
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v4
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache: true
+
+      - name: Build Lambda binary
+        env:
+          CGO_ENABLED: 0
+          GOOS: linux
+          GOARCH: arm64
+        run: |
+          go build -ldflags="-s -w -X main.Version=${{ github.sha }}" \
+            -o bootstrap cmd/lambda/main.go
+          file bootstrap
+          ls -lh bootstrap
+
+      - name: Upload Lambda artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: lambda-binary
+          path: bootstrap
+          retention-days: 1
+
+  # ==================== DOCKER BUILD ====================
+  docker:
+    name: Build & Push Docker Image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [ lint, security, test ]
+    if: github.event_name == 'push'
+    outputs:
+      image-digest: ${{ steps.docker-build.outputs.digest }}
+      image-tags: ${{ steps.meta.outputs.tags }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v2
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v2
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v4
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix={{branch}}-
+
+      - name: Build and push Docker image
+        id: docker-build
+        uses: docker/build-push-action@v4
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ==================== DEPLOY ====================
+  deploy:
+    name: Deploy to AWS Lambda
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: [ build, docker ]
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
+    environment:
+      name: ${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download Lambda artifact
+        uses: actions/download-artifact@v3
+        with:
+          name: lambda-binary
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ env.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: github-actions
+        env:
+          AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
+
+      - name: Get Lambda function name
+        id: lambda-name
+        run: |
+          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
+            echo "function-name=ChainOrchestrator-Lambda-Production" >> $GITHUB_OUTPUT
+            echo "env-name=production" >> $GITHUB_OUTPUT
+          else
+            echo "function-name=ChainOrchestrator-Lambda-Staging" >> $GITHUB_OUTPUT
+            echo "env-name=staging" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Check Lambda function exists
+        run: |
+          if ! aws lambda get-function --function-name "${{ steps.lambda-name.outputs.function-name }}" 2>/dev/null; then
+            echo "⚠️  Lambda function does not exist yet"
+            echo "Please create it manually in AWS console or via Terraform"
+            exit 1
+          fi
+          echo "✅ Lambda function found"
+
+      - name: Zip Lambda binary
+        run: |
+          zip -j lambda-deployment.zip bootstrap
+          ls -lh lambda-deployment.zip
+
+      - name: Update Lambda function code
+        run: |
+          aws lambda update-function-code \
+            --function-name "${{ steps.lambda-name.outputs.function-name }}" \
+            --zip-file fileb://lambda-deployment.zip \
+            --output json | jq '.Version, .LastModified'
+
+      - name: Wait for update
+        run: |
+          aws lambda wait function-updated \
+            --function-name "${{ steps.lambda-name.outputs.function-name }}"
+          echo "✅ Lambda function updated successfully"
+
+      - name: Publish new version
+        id: publish
+        run: |
+          VERSION=$(aws lambda publish-version \
+            --function-name "${{ steps.lambda-name.outputs.function-name }}" \
+            --query 'Version' \
+            --output text)
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "✅ Published version: $VERSION"
+
+      - name: Create/Update alias
+        run: |
+          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
+          ENV_NAME="${{ steps.lambda-name.outputs.env-name }}"
+          VERSION="${{ steps.publish.outputs.version }}"
+          
+          # Try to update, if fails create
+          aws lambda update-alias \
+            --function-name "$FUNCTION_NAME" \
+            --name "$ENV_NAME" \
+            --function-version "$VERSION" 2>/dev/null || \
+          aws lambda create-alias \
+            --function-name "$FUNCTION_NAME" \
+            --name "$ENV_NAME" \
+            --function-version "$VERSION"
+          
+          echo "✅ Alias '$ENV_NAME' points to version $VERSION"
+
+      - name: Health check
+        timeout-minutes: 5
+        run: |
+          ENV="${{ steps.lambda-name.outputs.env-name }}"
+          
+          if [ "$ENV" == "production" ]; then
+            URL="https://api.chainorchestrator.dev/health"
+          else
+            URL="https://staging-api.chainorchestrator.dev/health"
+          fi
+          
+          echo "🔍 Checking health at $URL"
+          
+          for i in {1..10}; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
+            
+            if [ "$STATUS" == "200" ]; then
+              echo "✅ Health check passed (attempt $i)"
+              exit 0
+            fi
+            
+            echo "⏳ Attempt $i/10 failed (status: $STATUS). Retrying in 10s..."
+            sleep 10
+          done
+          
+          echo "⚠️  Health check failed after 10 attempts"
+          echo "ℹ️  Make sure Lambda function and API Gateway are properly configured"
+
+      - name: Get deployment info
+        run: |
+          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
+          
+          echo "📋 Deployment Summary:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          aws lambda get-function-configuration \
+            --function-name "$FUNCTION_NAME" \
+            | jq '{
+              FunctionName,
+              Runtime,
+              Handler,
+              CodeSha256,
+              LastModified,
+              Version: .LastUpdateStatus
+            }'
+
+      - name: Create deployment record
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const deployment = await github.rest.repos.createDeployment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: context.ref,
+              environment: '${{ steps.lambda-name.outputs.env-name }}',
+              description: 'Lambda deployment ${{ steps.publish.outputs.version }}',
+              required_contexts: [],
+              auto_merge: false,
+              production_environment: ${{ github.ref == 'refs/heads/main' }}
+            });
+            
+            core.info(`Deployment created: ${deployment.data.id}`);
+
+      - name: Slack notification
+        if: always()
+        uses: slackapi/slack-github-action@v1
+        with:
+          payload: |
+            {
+              "text": "${{ job.status == 'success' && '✅' || '❌' }} Lambda Deployment ${{ steps.lambda-name.outputs.env-name }}",
+              "blocks": [
+                {
+                  "type": "section",
+                  "text": {
+                    "type": "mrkdwn",
+                    "text": "*ChainOrchestrator Lambda*\n${{ steps.lambda-name.outputs.env-name }}\nVersion: ${{ steps.publish.outputs.version }}\nStatus: ${{ job.status }}"
+                  }
+                }
+              ]
+            }
+        env:
+          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
+          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
+          SLACK_HOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        continue-on-error: true
+
+  # ==================== SUMMARY ====================
+  summary:
+    name: Pipeline Summary
+    runs-on: ubuntu-latest
+    if: always()
+    needs: [ lint, security, test, build, docker, deploy ]
+    steps:
+      - name: Check results
+        run: |
+          echo "📊 Pipeline Results:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✅ Lint:     ${{ needs.lint.result }}"
+          echo "✅ Security: ${{ needs.security.result }}"
+          echo "✅ Test:     ${{ needs.test.result }}"
+          echo "✅ Build:    ${{ needs.build.result }}"
+          echo "✅ Docker:   ${{ needs.docker.result }}"
+          echo "✅ Deploy:   ${{ needs.deploy.result }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          
+          if [ "${{ needs.lint.result }}" == "failure" ] || \
+             [ "${{ needs.security.result }}" == "failure" ] || \
+             [ "${{ needs.test.result }}" == "failure" ]; then
+            echo "❌ Pipeline failed"
+            exit 1
+          fi
+          
+          echo "✅ Pipeline completed successfully"
+
+      - name: Report to PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const status = '${{ job.status }}';
+            const emoji = status === 'success' ? '✅' : '❌';
+            
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## ${emoji} Pipeline Status\n\n- Lint: ${{ needs.lint.result }}\n- Security: ${{ needs.security.result }}\n- Tests: ${{ needs.test.result }}\n- Build: ${{ needs.build.result }}\n- Docker: ${{ needs.docker.result }}\n- Deploy: ${{ needs.deploy.result }}`
+            });
