@@ -292,85 +292,24 @@ jobs:
       - name: Get Lambda function name
         id: lambda-name
         run: |
-          if [ "${{ github.ref }}" == "refs/heads/main" ]; then
-            echo "function-name=ChainOrchestrator-Lambda-Production" >> $GITHUB_OUTPUT
-            echo "env-name=production" >> $GITHUB_OUTPUT
-          else
-            echo "function-name=ChainOrchestrator-Lambda-Staging" >> $GITHUB_OUTPUT
-            echo "env-name=staging" >> $GITHUB_OUTPUT
-          fi
+          echo "function-name=ChainOrchestrator-Lambda" >> $GITHUB_OUTPUT
+          echo "env-name=${{ github.ref == 'refs/heads/main' && 'production' || 'staging' }}" >> $GITHUB_OUTPUT
 
-      - name: Check or Create Lambda function
-        id: check-lambda
+      - name: Check Lambda function exists
         run: |
           FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
           
-          if aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
-            echo "✅ Lambda function found"
-            echo "exists=true" >> $GITHUB_OUTPUT
-          else
-            echo "⚠️  Lambda function does not exist. Creating..."
-            
-            # Create execution role if it doesn't exist
-            ROLE_NAME="ChainOrchestrator-Lambda-ExecutionRole"
-            
-            if ! aws iam get-role --role-name "$ROLE_NAME" 2>/dev/null; then
-              echo "Creating IAM role..."
-              
-              cat > trust-policy.json <<EOF
-          {
-            "Version": "2012-10-17",
-            "Statement": [
-              {
-                "Effect": "Allow",
-                "Principal": {
-                  "Service": "lambda.amazonaws.com"
-                },
-                "Action": "sts:AssumeRole"
-              }
-            ]
-          }
-          EOF
-              
-              aws iam create-role \
-                --role-name "$ROLE_NAME" \
-                --assume-role-policy-document file://trust-policy.json
-              
-              # Attach basic Lambda execution policy
-              aws iam attach-role-policy \
-                --role-name "$ROLE_NAME" \
-                --policy-arn arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
-              
-              # Wait for role to be available
-              sleep 10
-            fi
-            
-            ROLE_ARN=$(aws iam get-role --role-name "$ROLE_NAME" --query 'Role.Arn' --output text)
-            
-            # Create placeholder zip
-            echo '#!/bin/sh' > bootstrap
-            echo 'echo "Placeholder"' >> bootstrap
-            chmod +x bootstrap
-            zip placeholder.zip bootstrap
-            
-            # Create Lambda function
-            aws lambda create-function \
-              --function-name "$FUNCTION_NAME" \
-              --runtime provided.al2023 \
-              --role "$ROLE_ARN" \
-              --architectures arm64 \
-              --handler bootstrap \
-              --zip-file fileb://placeholder.zip \
-              --timeout 60 \
-              --memory-size 512 \
-              --description "ChainOrchestrator Lambda - ${{ steps.lambda-name.outputs.env-name }}"
-            
-            echo "✅ Lambda function created"
-            echo "exists=false" >> $GITHUB_OUTPUT
-            
-            # Wait for function to be active
-            aws lambda wait function-active --function-name "$FUNCTION_NAME"
+          if ! aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
+            echo "❌ Lambda function '$FUNCTION_NAME' does not exist"
+            echo ""
+            echo "Please run this script to create it:"
+            echo "  chmod +x .github/create-lambda-functions.sh"
+            echo "  ./.github/create-lambda-functions.sh"
+            echo ""
+            exit 1
           fi
+          
+          echo "✅ Lambda function found: $FUNCTION_NAME"
 
       - name: Zip Lambda binary
         run: |
