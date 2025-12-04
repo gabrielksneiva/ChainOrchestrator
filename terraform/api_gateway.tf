@@ -1,6 +1,6 @@
 # API Gateway HTTP API
 resource "aws_apigatewayv2_api" "main" {
-  name          = "${var.project_name}-api-${var.environment}"
+  name          = "${var.project_name}-api"
   protocol_type = "HTTP"
   description   = "ChainOrchestrator HTTP API Gateway"
 
@@ -50,7 +50,7 @@ resource "aws_apigatewayv2_stage" "default" {
 
 # CloudWatch Log Group for API Gateway
 resource "aws_cloudwatch_log_group" "api_gateway_logs" {
-  name              = "/aws/apigateway/${var.project_name}-${var.environment}"
+  name              = "/aws/apigateway/${var.project_name}"
   retention_in_days = var.log_retention_days
 
   tags = {

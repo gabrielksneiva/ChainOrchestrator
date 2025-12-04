@@ -1,6 +1,6 @@
 # SNS Topic for Transactions
 resource "aws_sns_topic" "transactions" {
-  name              = "${var.project_name}-${var.sns_topic_name}-${var.environment}"
+  name              = "${var.project_name}-${var.sns_topic_name}"
   display_name      = "Blockchain Transactions Topic"
   fifo_topic        = false
   
@@ -75,7 +75,7 @@ resource "aws_sns_topic_subscription" "sol_subscription" {
 
 # SQS Queues para cada blockchain
 resource "aws_sqs_queue" "evm_queue" {
-  name                      = "evm-queue-${var.environment}"
+  name                      = "evm-queue"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600 # 14 dias
@@ -94,7 +94,7 @@ resource "aws_sqs_queue" "evm_queue" {
 }
 
 resource "aws_sqs_queue" "evm_dlq" {
-  name                      = "evm-dlq-${var.environment}"
+  name                      = "evm-dlq"
   message_retention_seconds = 1209600 # 14 dias
 
   tags = {
@@ -103,7 +103,7 @@ resource "aws_sqs_queue" "evm_dlq" {
 }
 
 resource "aws_sqs_queue" "tron_queue" {
-  name                      = "tron-queue-${var.environment}"
+  name                      = "tron-queue"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600
@@ -122,7 +122,7 @@ resource "aws_sqs_queue" "tron_queue" {
 }
 
 resource "aws_sqs_queue" "tron_dlq" {
-  name                      = "tron-dlq-${var.environment}"
+  name                      = "tron-dlq"
   message_retention_seconds = 1209600
 
   tags = {
@@ -131,7 +131,7 @@ resource "aws_sqs_queue" "tron_dlq" {
 }
 
 resource "aws_sqs_queue" "btc_queue" {
-  name                      = "btc-queue-${var.environment}"
+  name                      = "btc-queue"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600
@@ -150,7 +150,7 @@ resource "aws_sqs_queue" "btc_queue" {
 }
 
 resource "aws_sqs_queue" "btc_dlq" {
-  name                      = "btc-dlq-${var.environment}"
+  name                      = "btc-dlq"
   message_retention_seconds = 1209600
 
   tags = {
@@ -159,7 +159,7 @@ resource "aws_sqs_queue" "btc_dlq" {
 }
 
 resource "aws_sqs_queue" "sol_queue" {
-  name                      = "sol-queue-${var.environment}"
+  name                      = "sol-queue"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600
@@ -178,7 +178,7 @@ resource "aws_sqs_queue" "sol_queue" {
 }
 
 resource "aws_sqs_queue" "sol_dlq" {
-  name                      = "sol-dlq-${var.environment}"
+  name                      = "sol-dlq"
   message_retention_seconds = 1209600
 
   tags = {

@@ -22,9 +22,8 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Project     = "ChainOrchestrator"
-      Environment = var.environment
-      ManagedBy   = "Terraform"
+      Project   = "ChainOrchestrator"
+      ManagedBy = "Terraform"
     }
   }
 }

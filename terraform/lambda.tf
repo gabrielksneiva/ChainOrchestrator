@@ -1,7 +1,7 @@
 # Lambda Function
 resource "aws_lambda_function" "orchestrator" {
   filename      = "${path.module}/../lambda.zip"
-  function_name = "${var.project_name}-${var.environment}"
+  function_name = var.project_name
   role          = aws_iam_role.lambda_execution_role.arn
   handler       = "bootstrap"
   runtime       = "provided.al2023"
@@ -14,7 +14,6 @@ resource "aws_lambda_function" "orchestrator" {
 
   environment {
     variables = {
-      ENVIRONMENT   = var.environment
       SNS_TOPIC_ARN = aws_sns_topic.transactions.arn
     }
   }
@@ -35,7 +34,7 @@ resource "aws_lambda_function" "orchestrator" {
 
 # CloudWatch Log Group para Lambda
 resource "aws_cloudwatch_log_group" "lambda_logs" {
-  name              = "/aws/lambda/${var.project_name}-${var.environment}"
+  name              = "/aws/lambda/${var.project_name}"
   retention_in_days = var.log_retention_days
 
   tags = {
