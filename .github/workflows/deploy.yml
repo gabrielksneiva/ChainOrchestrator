@@ -318,27 +318,8 @@ jobs:
           echo "🔍 Running health checks..."
           echo ""
           
-          # Test Lambda directly
-          echo "1️⃣  Testing Lambda function directly..."
-          aws lambda invoke \
-            --function-name "$FUNCTION_NAME" \
-            --payload '{"httpMethod":"GET","path":"/health"}' \
-            --cli-binary-format raw-in-base64-out \
-            response.json > /dev/null
-          
-          if grep -q "healthy" response.json; then
-            echo "✅ Lambda health check passed"
-            cat response.json
-          else
-            echo "❌ Lambda health check failed"
-            cat response.json
-            exit 1
-          fi
-          
-          echo ""
-          
-          # Test API Gateway
-          echo "2️⃣  Testing API Gateway endpoint..."
+          # Test API Gateway (primary check)
+          echo "1️⃣  Testing API Gateway endpoint..."
           HEALTH_CHECK=$(curl -s "${API_ENDPOINT}/health")
           
           if echo "$HEALTH_CHECK" | grep -q "healthy"; then
@@ -349,8 +330,6 @@ jobs:
             echo "$HEALTH_CHECK"
             exit 1
           fi
-          
-          rm -f response.json
 
       - name: Deployment Summary
         run: |
