@@ -3,14 +3,6 @@ name: Deploy Lambda
 on:
   push:
     branches: [ main, develop ]
-    paths:
-      - 'cmd/**'
-      - 'internal/**'
-      - 'pkg/**'
-      - 'go.mod'
-      - 'go.sum'
-      - 'Dockerfile'
-      - '.github/workflows/deploy.yml'
   pull_request:
     branches: [ main, develop ]
   workflow_dispatch:
