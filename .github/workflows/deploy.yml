@@ -109,13 +109,6 @@ jobs:
         with:
           sarif_file: 'trivy-results.sarif'
 
-      - name: Run Nancy (dependency check)
-        run: |
-          go install github.com/sonatype-nexus-community/nancy@latest
-          go list -json -m all | nancy sleuth -o json > nancy-report.json || true
-          cat nancy-report.json
-        continue-on-error: true
-
   # ==================== TESTS & COVERAGE ====================
   test:
     name: Tests & Coverage
