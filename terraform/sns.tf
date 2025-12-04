@@ -75,7 +75,7 @@ resource "aws_sns_topic_subscription" "sol_subscription" {
 
 # SQS Queues para cada blockchain
 resource "aws_sqs_queue" "evm_queue" {
-  name                      = "${var.project_name}-evm-queue-${var.environment}"
+  name                      = "evm-queue-${var.environment}"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600 # 14 dias
@@ -88,22 +88,22 @@ resource "aws_sqs_queue" "evm_queue" {
   })
 
   tags = {
-    Name = "${var.project_name}-evm-queue"
+    Name = "evm-queue"
     ChainType = "EVM"
   }
 }
 
 resource "aws_sqs_queue" "evm_dlq" {
-  name                      = "${var.project_name}-evm-dlq-${var.environment}"
+  name                      = "evm-dlq-${var.environment}"
   message_retention_seconds = 1209600 # 14 dias
 
   tags = {
-    Name = "${var.project_name}-evm-dlq"
+    Name = "evm-dlq"
   }
 }
 
 resource "aws_sqs_queue" "tron_queue" {
-  name                      = "${var.project_name}-tron-queue-${var.environment}"
+  name                      = "tron-queue-${var.environment}"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600
@@ -116,22 +116,22 @@ resource "aws_sqs_queue" "tron_queue" {
   })
 
   tags = {
-    Name = "${var.project_name}-tron-queue"
+    Name = "tron-queue"
     ChainType = "TRON"
   }
 }
 
 resource "aws_sqs_queue" "tron_dlq" {
-  name                      = "${var.project_name}-tron-dlq-${var.environment}"
+  name                      = "tron-dlq-${var.environment}"
   message_retention_seconds = 1209600
 
   tags = {
-    Name = "${var.project_name}-tron-dlq"
+    Name = "tron-dlq"
   }
 }
 
 resource "aws_sqs_queue" "btc_queue" {
-  name                      = "${var.project_name}-btc-queue-${var.environment}"
+  name                      = "btc-queue-${var.environment}"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600
@@ -144,22 +144,22 @@ resource "aws_sqs_queue" "btc_queue" {
   })
 
   tags = {
-    Name = "${var.project_name}-btc-queue"
+    Name = "btc-queue"
     ChainType = "BTC"
   }
 }
 
 resource "aws_sqs_queue" "btc_dlq" {
-  name                      = "${var.project_name}-btc-dlq-${var.environment}"
+  name                      = "btc-dlq-${var.environment}"
   message_retention_seconds = 1209600
 
   tags = {
-    Name = "${var.project_name}-btc-dlq"
+    Name = "btc-dlq"
   }
 }
 
 resource "aws_sqs_queue" "sol_queue" {
-  name                      = "${var.project_name}-sol-queue-${var.environment}"
+  name                      = "sol-queue-${var.environment}"
   delay_seconds             = 0
   max_message_size          = 262144
   message_retention_seconds = 1209600
@@ -172,17 +172,17 @@ resource "aws_sqs_queue" "sol_queue" {
   })
 
   tags = {
-    Name = "${var.project_name}-sol-queue"
+    Name = "sol-queue"
     ChainType = "SOL"
   }
 }
 
 resource "aws_sqs_queue" "sol_dlq" {
-  name                      = "${var.project_name}-sol-dlq-${var.environment}"
+  name                      = "sol-dlq-${var.environment}"
   message_retention_seconds = 1209600
 
   tags = {
-    Name = "${var.project_name}-sol-dlq"
+    Name = "sol-dlq"
   }
 }
 
