@@ -16,7 +16,6 @@ resource "aws_lambda_function" "orchestrator" {
     variables = {
       ENVIRONMENT   = var.environment
       SNS_TOPIC_ARN = aws_sns_topic.transactions.arn
-      AWS_REGION    = var.aws_region
     }
   }
 
