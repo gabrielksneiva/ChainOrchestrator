@@ -86,7 +86,10 @@
         "sqs:GetQueueUrl",
         "sqs:ListQueues",
         "sqs:TagQueue",
-        "sqs:UntagQueue"
+        "sqs:UntagQueue",
+        "sqs:ReceiveMessage",
+        "sqs:DeleteMessage",
+        "sqs:SendMessage"
       ],
       "Resource": "*"
     },
