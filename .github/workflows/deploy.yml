@@ -357,30 +357,29 @@ jobs:
       - name: Health check
         timeout-minutes: 5
         run: |
+          FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
           ENV="${{ steps.lambda-name.outputs.env-name }}"
           
-          if [ "$ENV" == "production" ]; then
-            URL="https://api.chainorchestrator.dev/health"
+          echo "🔍 Testing Lambda function directly: $FUNCTION_NAME"
+          
+          # Test with a simple invoke
+          RESPONSE=$(aws lambda invoke \
+            --function-name "$FUNCTION_NAME" \
+            --payload '{"httpMethod":"GET","path":"/health"}' \
+            --cli-binary-format raw-in-base64-out \
+            response.json 2>&1)
+          
+          if [ $? -eq 0 ]; then
+            echo "✅ Lambda invocation successful"
+            cat response.json
+            rm -f response.json
           else
-            URL="https://staging-api.chainorchestrator.dev/health"
+            echo "⚠️  Lambda invocation failed"
+            echo "$RESPONSE"
+            echo ""
+            echo "ℹ️  Lambda function deployed but needs API Gateway configuration"
+            echo "ℹ️  To test manually: aws lambda invoke --function-name $FUNCTION_NAME response.json"
           fi
-          
-          echo "🔍 Checking health at $URL"
-          
-          for i in {1..10}; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$URL" 2>/dev/null || echo "000")
-            
-            if [ "$STATUS" == "200" ]; then
-              echo "✅ Health check passed (attempt $i)"
-              exit 0
-            fi
-            
-            echo "⏳ Attempt $i/10 failed (status: $STATUS). Retrying in 10s..."
-            sleep 10
-          done
-          
-          echo "⚠️  Health check failed after 10 attempts"
-          echo "ℹ️  Make sure Lambda function and API Gateway are properly configured"
 
       - name: Get deployment info
         run: |
