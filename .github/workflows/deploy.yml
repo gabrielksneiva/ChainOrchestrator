@@ -257,9 +257,9 @@ jobs:
 
   # ==================== DEPLOY ====================
   deploy:
-    name: Deploy Infrastructure with Terraform
+    name: Deploy Lambda Function
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 15
     needs: [ build, docker ]
     if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'
     environment:
@@ -282,15 +282,9 @@ jobs:
         with:
           role-to-assume: ${{ env.AWS_ROLE_ARN }}
           aws-region: ${{ env.AWS_REGION }}
-          role-session-name: github-actions-terraform
+          role-session-name: github-actions-deploy
         env:
           AWS_ROLE_ARN: ${{ secrets.AWS_ROLE_ARN }}
-
-      - name: Setup Terraform
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: 1.7.0
-          terraform_wrapper: false
 
       - name: Prepare Lambda package
         run: |
@@ -299,140 +293,78 @@ jobs:
           ls -lh lambda.zip
           echo "✅ Lambda package ready"
 
-      - name: Terraform Init
-        working-directory: terraform
+      - name: Update Lambda code
         run: |
-          echo "🔧 Initializing Terraform..."
-          terraform init
-
-      - name: Terraform Format Check
-        working-directory: terraform
-        run: terraform fmt -check -recursive || true
-
-      - name: Terraform Validate
-        working-directory: terraform
-        run: terraform validate
-
-      - name: Terraform Plan
-        working-directory: terraform
-        run: |
-          echo "📋 Planning infrastructure changes..."
-          terraform plan -out=tfplan -input=false
-          terraform show -no-color tfplan > tfplan.txt
-
-      - name: Upload plan
-        uses: actions/upload-artifact@v4
-        with:
-          name: terraform-plan
-          path: terraform/tfplan.txt
-          retention-days: 7
-
-      - name: Terraform Apply
-        working-directory: terraform
-        run: |
-          echo "🚀 Applying infrastructure changes..."
-          terraform apply -auto-approve -input=false tfplan
-
-      - name: Get Infrastructure Outputs
-        id: tf-outputs
-        working-directory: terraform
-        run: |
-          API_ENDPOINT=$(terraform output -raw api_endpoint 2>/dev/null || echo "not-configured")
-          LAMBDA_NAME=$(terraform output -raw lambda_function_name)
-          SNS_TOPIC=$(terraform output -raw sns_topic_arn)
+          FUNCTION_NAME="chainorchestrator-production"
           
-          echo "api-endpoint=$API_ENDPOINT" >> $GITHUB_OUTPUT
-          echo "lambda-name=$LAMBDA_NAME" >> $GITHUB_OUTPUT
-          echo "sns-topic=$SNS_TOPIC" >> $GITHUB_OUTPUT
+          echo "⚡ Deploying Lambda function: $FUNCTION_NAME"
+          
+          aws lambda update-function-code \
+            --function-name "$FUNCTION_NAME" \
+            --zip-file fileb://lambda.zip \
+            --output json | jq -r '.Version, .LastModified, .CodeSha256'
+          
+          echo "⏳ Waiting for Lambda update to complete..."
+          aws lambda wait function-updated --function-name "$FUNCTION_NAME"
+          
+          echo "✅ Lambda code deployed successfully"
 
       - name: Health Check
-        timeout-minutes: 5
+        timeout-minutes: 3
         run: |
-          LAMBDA_NAME="${{ steps.tf-outputs.outputs.lambda-name }}"
-          API_ENDPOINT="${{ steps.tf-outputs.outputs.api-endpoint }}"
+          FUNCTION_NAME="chainorchestrator-production"
+          API_ENDPOINT="https://lj2vv3cmj1.execute-api.us-east-1.amazonaws.com"
           
           echo "🔍 Running health checks..."
           echo ""
           
           # Test Lambda directly
-          echo "Testing Lambda function: $LAMBDA_NAME"
+          echo "1️⃣  Testing Lambda function directly..."
           aws lambda invoke \
-            --function-name "$LAMBDA_NAME" \
+            --function-name "$FUNCTION_NAME" \
             --payload '{"httpMethod":"GET","path":"/health"}' \
             --cli-binary-format raw-in-base64-out \
-            response.json
+            response.json > /dev/null
           
-          echo "Lambda Response:"
-          cat response.json
+          if grep -q "healthy" response.json; then
+            echo "✅ Lambda health check passed"
+            cat response.json
+          else
+            echo "❌ Lambda health check failed"
+            cat response.json
+            exit 1
+          fi
+          
           echo ""
           
-          # Test API Gateway if configured
-          if [ "$API_ENDPOINT" != "not-configured" ]; then
-            echo "Testing API Gateway: ${API_ENDPOINT}/health"
-            HEALTH_RESPONSE=$(curl -s -w "\n%{http_code}" "${API_ENDPOINT}/health" || echo "000")
-            HTTP_CODE=$(echo "$HEALTH_RESPONSE" | tail -n1)
-            
-            if [ "$HTTP_CODE" -eq 200 ]; then
-              echo "✅ API Gateway health check passed"
-            else
-              echo "⚠️  API Gateway health check failed (HTTP $HTTP_CODE)"
-            fi
+          # Test API Gateway
+          echo "2️⃣  Testing API Gateway endpoint..."
+          HEALTH_CHECK=$(curl -s "${API_ENDPOINT}/health")
+          
+          if echo "$HEALTH_CHECK" | grep -q "healthy"; then
+            echo "✅ API Gateway health check passed"
+            echo "$HEALTH_CHECK"
           else
-            echo "ℹ️  API Gateway not configured, skipping HTTP check"
+            echo "❌ API Gateway health check failed"
+            echo "$HEALTH_CHECK"
+            exit 1
           fi
           
           rm -f response.json
 
       - name: Deployment Summary
         run: |
+          echo ""
           echo "📋 Deployment Summary"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "API Endpoint:  ${{ steps.tf-outputs.outputs.api-endpoint }}"
-          echo "Lambda:        ${{ steps.tf-outputs.outputs.lambda-name }}"
-          echo "SNS Topic:     ${{ steps.tf-outputs.outputs.sns-topic }}"
-          echo "Region:        ${{ env.AWS_REGION }}"
-          echo "Commit:        ${{ github.sha }}"
+          echo "✅ Lambda:       chainorchestrator-production"
+          echo "✅ API Endpoint: https://lj2vv3cmj1.execute-api.us-east-1.amazonaws.com/"
+          echo "✅ Region:       ${{ env.AWS_REGION }}"
+          echo "✅ Commit:       ${{ github.sha }}"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-
-      - name: Create deployment record
-        uses: actions/github-script@v6
-        with:
-          script: |
-            const deployment = await github.rest.repos.createDeployment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: context.ref,
-              environment: '${{ steps.lambda-name.outputs.env-name }}',
-              description: 'Lambda deployment ${{ steps.publish.outputs.version }}',
-              required_contexts: [],
-              auto_merge: false,
-              production_environment: ${{ github.ref == 'refs/heads/main' }}
-            });
-            
-            core.info(`Deployment created: ${deployment.data.id}`);
-
-      - name: Slack notification
-        if: always()
-        uses: slackapi/slack-github-action@v1
-        with:
-          payload: |
-            {
-              "text": "${{ job.status == 'success' && '✅' || '❌' }} Lambda Deployment ${{ steps.lambda-name.outputs.env-name }}",
-              "blocks": [
-                {
-                  "type": "section",
-                  "text": {
-                    "type": "mrkdwn",
-                    "text": "*ChainOrchestrator Lambda*\n${{ steps.lambda-name.outputs.env-name }}\nVersion: ${{ steps.publish.outputs.version }}\nStatus: ${{ job.status }}"
-                  }
-                }
-              ]
-            }
-        env:
-          SLACK_WEBHOOK_URL: ${{ env.SLACK_WEBHOOK_URL }}
-          SLACK_WEBHOOK_TYPE: INCOMING_WEBHOOK
-          SLACK_HOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-        continue-on-error: true
+          echo ""
+          echo "🚀 Fast deployment complete! (no Terraform run)"
+          echo "ℹ️  To update infrastructure, run: cd terraform && terraform apply"
 
   # ==================== SUMMARY ====================
   summary:
