@@ -37,7 +37,4 @@ deps: ## Download dependencies
 	go mod download
 	go mod verify
 
-tidy: ## Tidy dependencies
-	go mod tidy
-
 all: clean deps fmt lint test build ## Run all checks and build
