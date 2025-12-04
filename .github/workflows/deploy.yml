@@ -299,13 +299,17 @@ jobs:
         run: |
           FUNCTION_NAME="${{ steps.lambda-name.outputs.function-name }}"
           
-          if ! aws lambda get-function --function-name "$FUNCTION_NAME" 2>/dev/null; then
-            echo "❌ Lambda function '$FUNCTION_NAME' does not exist"
+          echo "🔍 Checking for Lambda function: $FUNCTION_NAME"
+          echo "AWS Region: ${{ env.AWS_REGION }}"
+          
+          # List all functions to debug
+          echo "Available functions:"
+          aws lambda list-functions --query 'Functions[].FunctionName' --output text
+          
+          # Check specific function
+          if ! aws lambda get-function --function-name "$FUNCTION_NAME" 2>&1; then
             echo ""
-            echo "Please run this script to create it:"
-            echo "  chmod +x .github/create-lambda-functions.sh"
-            echo "  ./.github/create-lambda-functions.sh"
-            echo ""
+            echo "❌ Lambda function '$FUNCTION_NAME' not found or no permission"
             exit 1
           fi
           
