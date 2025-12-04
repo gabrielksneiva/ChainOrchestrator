@@ -58,13 +58,15 @@ echo "📋 Test 2: POST /transaction (EVM blockchain)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 TRANSACTION_PAYLOAD='{
-  "blockchain": "EVM",
-  "network": "ethereum",
-  "transaction_type": "transfer",
-  "from_address": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
-  "to_address": "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199",
-  "amount": "1.5",
-  "currency": "ETH"
+  "chain_type": "EVM",
+  "operation_type": "transfer",
+  "payload": {
+    "network": "ethereum",
+    "from_address": "0x742d35Cc6634C0532925a3b844Bc9e7595f0bEb",
+    "to_address": "0x8626f6940E2eb28930eFb4CeF49B2d1F2C9C1199",
+    "amount": "1.5",
+    "currency": "ETH"
+  }
 }'
 
 TX_RESPONSE=$(curl -s -w "\n%{http_code}" \
@@ -76,13 +78,13 @@ TX_HTTP_CODE=$(echo "$TX_RESPONSE" | tail -n1)
 TX_BODY=$(echo "$TX_RESPONSE" | head -n1)
 
 if [ "$TX_HTTP_CODE" -eq 200 ] || [ "$TX_HTTP_CODE" -eq 202 ]; then
-  if echo "$TX_BODY" | grep -q "message_id"; then
+  if echo "$TX_BODY" | grep -q "operation_id"; then
     pass "Transaction submitted successfully"
     info "Response: $TX_BODY"
-    MESSAGE_ID=$(echo "$TX_BODY" | grep -o '"message_id":"[^"]*"' | cut -d'"' -f4)
-    info "SNS Message ID: $MESSAGE_ID"
+    OPERATION_ID=$(echo "$TX_BODY" | grep -o '"operation_id":"[^"]*"' | cut -d'"' -f4)
+    info "Operation ID: $OPERATION_ID"
   else
-    fail "Transaction returned success but no message_id: $TX_BODY"
+    fail "Transaction returned success but no operation_id: $TX_BODY"
   fi
 else
   fail "Transaction endpoint returned HTTP $TX_HTTP_CODE: $TX_BODY"
@@ -140,13 +142,15 @@ echo "📋 Test 4: POST /transaction (Bitcoin blockchain)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 BTC_PAYLOAD='{
-  "blockchain": "Bitcoin",
-  "network": "mainnet",
-  "transaction_type": "transfer",
-  "from_address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
-  "to_address": "3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy",
-  "amount": "0.001",
-  "currency": "BTC"
+  "chain_type": "BTC",
+  "operation_type": "transfer",
+  "payload": {
+    "network": "mainnet",
+    "from_address": "1A1zP1eP5QGefi2DMPTfTL5SLmv7DivfNa",
+    "to_address": "3J98t1WpEZ73CNmYviecrnyiWrnqRhWNLy",
+    "amount": "0.001",
+    "currency": "BTC"
+  }
 }'
 
 BTC_RESPONSE=$(curl -s -w "\n%{http_code}" \
@@ -208,7 +212,7 @@ echo "📋 Test 6: Invalid transaction (missing required fields)"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 INVALID_PAYLOAD='{
-  "blockchain": "EVM"
+  "chain_type": "EVM"
 }'
 
 INVALID_RESPONSE=$(curl -s -w "\n%{http_code}" \
