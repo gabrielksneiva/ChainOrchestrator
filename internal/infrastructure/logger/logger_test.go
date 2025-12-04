@@ -54,8 +54,9 @@ func TestNewNopLogger(t *testing.T) {
 }
 
 func TestLogger_Logging(t *testing.T) {
-	log, _ := logger.NewLogger("development")
-	defer log.Sync()
+	log, err := logger.NewLogger("development")
+	assert.NoError(t, err)
+	defer func() { _ = log.Sync() }()
 
 	// Should not panic
 	log.Info("info message", zap.String("key", "value"))
@@ -65,8 +66,9 @@ func TestLogger_Logging(t *testing.T) {
 }
 
 func TestLogger_WithFields(t *testing.T) {
-	log, _ := logger.NewLogger("production")
-	defer log.Sync()
+	log, err := logger.NewLogger("production")
+	assert.NoError(t, err)
+	defer func() { _ = log.Sync() }()
 
 	// Should not panic with structured fields
 	log.Info("structured logging",
@@ -77,8 +79,9 @@ func TestLogger_WithFields(t *testing.T) {
 }
 
 func TestLogger_StackTrace(t *testing.T) {
-	log, _ := logger.NewLogger("production")
-	defer log.Sync()
+	log, err := logger.NewLogger("production")
+	assert.NoError(t, err)
+	defer func() { _ = log.Sync() }()
 
 	// Error level should include stack trace
 	log.Error("error with stack",
@@ -89,7 +92,7 @@ func TestLogger_StackTrace(t *testing.T) {
 
 func TestLogger_LevelFiltering(t *testing.T) {
 	log, _ := logger.NewLogger("production")
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	// Production logger should filter debug messages
 	// This should not appear in output
@@ -106,12 +109,12 @@ func TestLogger_OutputPaths(t *testing.T) {
 	assert.NotNil(t, log)
 
 	// Verify logger was created successfully (implicit verification of output paths)
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 }
 
 func TestLogger_Caller(t *testing.T) {
 	log, _ := logger.NewLogger("development")
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	// Development logger should include caller information
 	log.Info("message with caller info")
@@ -119,7 +122,7 @@ func TestLogger_Caller(t *testing.T) {
 
 func TestLogger_ErrorOutput(t *testing.T) {
 	log, _ := logger.NewLogger("production")
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 
 	// Errors should go to stderr
 	log.Error("error to stderr", zap.Error(assert.AnError))
@@ -130,7 +133,7 @@ func TestLogger_EmptyEnvironment(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, log)
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 }
 
 func TestLogger_NonStandardEnvironment(t *testing.T) {
@@ -138,5 +141,5 @@ func TestLogger_NonStandardEnvironment(t *testing.T) {
 
 	assert.NoError(t, err)
 	assert.NotNil(t, log)
-	defer log.Sync()
+	defer func() { _ = log.Sync() }()
 }
