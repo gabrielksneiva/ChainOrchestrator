@@ -15,7 +15,7 @@ func TestNewLogger_Production(t *testing.T) {
 	assert.NotNil(t, log)
 
 	// Clean up
-	log.Sync()
+	_ = log.Sync()
 }
 
 func TestNewLogger_Development(t *testing.T) {
@@ -28,7 +28,7 @@ func TestNewLogger_Development(t *testing.T) {
 	log.Info("test message")
 
 	// Clean up
-	log.Sync()
+	_ = log.Sync()
 }
 
 func TestNewLogger_Staging(t *testing.T) {
@@ -38,7 +38,7 @@ func TestNewLogger_Staging(t *testing.T) {
 	assert.NotNil(t, log)
 
 	// Clean up
-	log.Sync()
+	_ = log.Sync()
 }
 
 func TestNewNopLogger(t *testing.T) {
