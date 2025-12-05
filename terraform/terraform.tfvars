@@ -1,5 +1,4 @@
 aws_region         = "us-east-1"
-environment        = "production"
 project_name       = "chainorchestrator"
 sns_topic_name     = "Transactions"
 lambda_timeout     = 60

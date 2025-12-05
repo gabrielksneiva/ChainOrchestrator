@@ -120,6 +120,16 @@ jobs:
           echo "🗑️  Destroying infrastructure..."
           terraform destroy -auto-approve -input=false
 
+      - name: Get Terraform Outputs
+        if: github.event.inputs.action != 'destroy'
+        id: get-outputs
+        working-directory: terraform
+        run: |
+          API_URL=$(terraform output -raw api_gateway_url 2>/dev/null || echo "")
+          SNS_ARN=$(terraform output -raw sns_topic_arn 2>/dev/null || echo "")
+          echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+          echo "sns_arn=$SNS_ARN" >> $GITHUB_OUTPUT
+
       - name: Terraform Outputs
         if: github.event.inputs.action != 'destroy'
         working-directory: terraform
@@ -127,6 +137,18 @@ jobs:
           echo "📋 Infrastructure Outputs:"
           echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
           terraform output
+
+      - name: Run E2E Tests
+        if: |
+          github.event.inputs.action == 'apply' || 
+          (github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/develop'))
+        working-directory: .
+        env:
+          API_GATEWAY_URL: ${{ steps.get-outputs.outputs.api_url }}
+          SNS_TOPIC_ARN: ${{ steps.get-outputs.outputs.sns_arn }}
+        run: |
+          chmod +x test-e2e.sh
+          ./test-e2e.sh
 
       - name: Summary
         if: always()
