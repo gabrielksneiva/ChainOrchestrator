@@ -7,7 +7,7 @@ resource "aws_lambda_function" "orchestrator" {
   runtime       = "provided.al2023"
   architectures = ["arm64"]
 
-  source_code_hash = filebase64sha256("${path.module}/../lambda.zip")
+  source_code_hash = fileexists("${path.module}/../lambda.zip") ? filebase64sha256("${path.module}/../lambda.zip") : ""
 
   timeout     = var.lambda_timeout
   memory_size = var.lambda_memory
