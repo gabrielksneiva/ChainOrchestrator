@@ -1,5 +1,8 @@
 package main
 
+// Lambda handler for transaction orchestration
+// Updated: 2025-12-04 - Testing CI/CD pipeline with updated IAM
+
 import (
 	"context"
 
